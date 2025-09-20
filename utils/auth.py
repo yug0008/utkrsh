@@ -4,15 +4,14 @@ from jose import JWTError, jwt
 from datetime import datetime, timedelta
 from typing import Optional
 import os
-from dotenv import load_dotenv
+import logging
 
-from models.user import User
 from models.database import get_supabase_client
 
-load_dotenv()
+logger = logging.getLogger(__name__)
 
 # JWT configuration
-SECRET_KEY = os.getenv("SUPABASE_JWT_SECRET", "fallback-secret-key")
+SECRET_KEY = os.getenv("SUPABASE_JWT_SECRET", "fallback-secret-key-for-development")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
@@ -45,13 +44,27 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     
     # Get user from Supabase
     supabase = get_supabase_client()
-    response = supabase.table("users").select("*").eq("id", user_id).execute()
+    if supabase is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication service unavailable"
+        )
     
-    if not response.data:
+    try:
+        response = supabase.table("users").select("*").eq("id", user_id).execute()
+        
+        if not response.data:
+            raise credentials_exception
+        
+        user_data = response.data[0]
+        
+        # Import here to avoid circular imports
+        from models.user import User
+        return User(**user_data)
+    
+    except Exception as e:
+        logger.error(f"Error fetching user: {str(e)}")
         raise credentials_exception
-    
-    user_data = response.data[0]
-    return User(**user_data)
 
 def verify_password(plain_password, hashed_password):
     # Supabase handles password verification through its auth system
