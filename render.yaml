@@ -4,22 +4,16 @@ services:
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port 10000
+    startCommand: ./start.sh
     envVars:
       - key: SUPABASE_URL
-        fromService:
-          name: sports-talent-db
-          type: postgresql
-          property: connectionString
-      - key: DATABASE_URL
-        fromService:
-          name: sports-talent-db
-          type: postgresql
-          property: connectionString
+        value: your_supabase_project_url_here
+      - key: SUPABASE_KEY
+        value: your_supabase_anon_key_here
+      - key: SUPABASE_JWT_SECRET
+        value: your_supabase_jwt_secret_here
       - key: PYTHON_VERSION
         value: 3.11.0
-      - key: SUPABASE_JWT_SECRET
-        generateValue: true
     healthCheckPath: /health
 
 databases:
