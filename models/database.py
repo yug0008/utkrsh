@@ -2,35 +2,84 @@ from supabase import create_client, Client
 import os
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
-from dotenv import load_dotenv
+import logging
+from typing import Optional
 
-load_dotenv()
+logger = logging.getLogger(__name__)
 
-# Initialize Supabase client
-supabase: Client = create_client(
-    os.getenv("SUPABASE_URL"),
-    os.getenv("SUPABASE_KEY")
-)
+# Initialize Supabase client lazily to avoid errors at import time
+_supabase_client = None
+_engine = None
+_SessionLocal = None
 
-# SQLAlchemy setup for PostgreSQL
-DATABASE_URL = os.getenv("DATABASE_URL")
-if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+def get_supabase_client():
+    global _supabase_client
+    if _supabase_client is None:
+        supabase_url = os.getenv("SUPABASE_URL")
+        supabase_key = os.getenv("SUPABASE_KEY")
+        
+        if not supabase_url or not supabase_key:
+            logger.warning("Supabase credentials not found. Some features may not work.")
+            return None
+        
+        try:
+            _supabase_client = create_client(supabase_url, supabase_key)
+            logger.info("Supabase client initialized successfully")
+        except Exception as e:
+            logger.error(f"Error initializing Supabase client: {str(e)}")
+            return None
+    
+    return _supabase_client
 
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+def get_db_engine():
+    global _engine
+    if _engine is None:
+        DATABASE_URL = os.getenv("DATABASE_URL")
+        
+        if not DATABASE_URL:
+            logger.warning("DATABASE_URL not found. Database operations will not work.")
+            return None
+        
+        # Fix common connection string issues
+        if DATABASE_URL.startswith("postgres://"):
+            DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+        
+        try:
+            _engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+            logger.info("Database engine created successfully")
+        except Exception as e:
+            logger.error(f"Error creating database engine: {str(e)}")
+            return None
+    
+    return _engine
+
+def get_db_session():
+    global _SessionLocal
+    if _SessionLocal is None:
+        engine = get_db_engine()
+        if engine is None:
+            return None
+        _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    
+    return _SessionLocal
 
 def get_db():
+    SessionLocal = get_db_session()
+    if SessionLocal is None:
+        raise Exception("Database not configured")
+    
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
 
-def get_supabase_client():
-    return supabase
-
 def create_db_and_tables():
+    engine = get_db_engine()
+    if engine is None:
+        logger.error("Cannot create tables - database engine not available")
+        return
+    
     # Create necessary tables if they don't exist
     try:
         with engine.connect() as connection:
@@ -92,8 +141,29 @@ def create_db_and_tables():
                 )
             """))
             
+            # Create achievements table
+            connection.execute(text("""
+                CREATE TABLE IF NOT EXISTS achievements (
+                    id SERIAL PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL,
+                    description TEXT,
+                    badge_url TEXT,
+                    criteria JSONB
+                )
+            """))
+            
+            # Create user_achievements table
+            connection.execute(text("""
+                CREATE TABLE IF NOT EXISTS user_achievements (
+                    id SERIAL PRIMARY KEY,
+                    user_id VARCHAR(255) REFERENCES users(id),
+                    achievement_id INTEGER REFERENCES achievements(id),
+                    earned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    awarded_by VARCHAR(255)
+                )
+            """))
+            
             connection.commit()
-            print("Database tables created successfully")
+            logger.info("Database tables created successfully")
     except Exception as e:
-        print(f"Error creating database tables: {str(e)}")
-        # Don't raise exception to allow app to start
+        logger.error(f"Error creating database tables: {str(e)}")
